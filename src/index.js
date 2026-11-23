@@ -9,6 +9,28 @@ const IMG_CAP = 40;
 const enc = new TextEncoder();
 const now = () => Date.now();
 
+// ---------------------------------------------------------------- archivos (Workers KV: gratis y sin tarjeta)
+// Videos y personaje se guardan en KV (máximo 25 MB por archivo).
+function archivos(env) {
+  const kv = env.ARCHIVOS;
+  return {
+    async put(k, v, o) {
+      await kv.put(k, v, {metadata: {type: o?.httpMetadata?.contentType || 'application/octet-stream'}});
+    },
+    async get(k) {
+      const r = await kv.getWithMetadata(k, {type: 'stream'});
+      return r && r.value ? {body: r.value, httpMetadata: {contentType: r.metadata?.type}} : null;
+    },
+    async head(k) {
+      const r = await kv.list({prefix: k, limit: 1});
+      return r.keys.some((x) => x.name === k) ? {} : null;
+    },
+    async delete(k) {
+      await kv.delete(k);
+    },
+  };
+}
+
 // ---------------------------------------------------------------- utilidades
 const json = (b, s = 200, h = {}) => new Response(JSON.stringify(b), {status: s, headers: {'Content-Type': 'application/json', 'Cache-Control': 'no-store', ...h}});
 const b64u = (bytes) => btoa(String.fromCharCode(...new Uint8Array(bytes))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
@@ -332,7 +354,7 @@ async function api(req, env, path, origin) {
     }
     if (path.startsWith('robot/personaje/')) {
       const k = path.slice(16);
-      const o = await env.BUCKET.get('personaje/' + (k === 'open' ? 'abierta' : 'cerrada'));
+      const o = await archivos(env).get('personaje/' + (k === 'open' ? 'abierta' : 'cerrada'));
       if (!o) return json({error: 'Sin imagen'}, 404);
       return new Response(o.body, {headers: {'Content-Type': o.httpMetadata?.contentType || 'image/png'}});
     }
@@ -340,8 +362,9 @@ async function api(req, env, path, origin) {
       const v = await loadVideo(env, req.headers.get('X-Project-Id'));
       if (!v || v.token !== req.headers.get('X-Render-Token')) return json({error: 'Video desconocido'}, 404);
       const bytes = await req.arrayBuffer();
-      if (bytes.byteLength < 10000 || bytes.byteLength > 90e6) return json({error: 'Video inválido'}, 400);
-      await env.BUCKET.put('videos/' + v.id + '.mp4', bytes, {httpMetadata: {contentType: 'video/mp4'}});
+      if (bytes.byteLength < 10000) return json({error: 'Video inválido'}, 400);
+      if (bytes.byteLength > 25e6) return json({error: 'El video pesa más de 25 MB'}, 413);
+      await archivos(env).put('videos/' + v.id + '.mp4', bytes, {httpMetadata: {contentType: 'video/mp4'}});
       v.estado = 'listo';
       v.listo = now();
       v.tam = bytes.byteLength;
@@ -400,7 +423,7 @@ async function api(req, env, path, origin) {
       canal: await get(env, 'canal', CANAL_DEFAULT),
       voces: VOCES,
       robot: {...(await get(env, 'robot', {})), visto: await get(env, 'robotVisto')},
-      personaje: !!(await env.BUCKET.head('personaje/cerrada')),
+      personaje: !!(await archivos(env).head('personaje/cerrada')),
       resumen: await resumen(env),
       necesita: await necesita(env),
       videos: (await listVideos(env)).filter((v) => v.estado !== 'borrado').map(({token, scenes, imgStyle, ...v}) => ({...v, escenas: scenes?.length || 0})),
@@ -435,8 +458,8 @@ async function api(req, env, path, origin) {
         `Portrait from the chest up of ${d}. Friendly expression, looking at the camera, centered, head and shoulders, 3D animated movie character style. ` +
           'Plain solid bright green background (chroma key green #00B140), even lighting, no shadows on the background. No text.',
       );
-      await env.BUCKET.put('personaje/cerrada', img, {httpMetadata: {contentType: 'image/jpeg'}});
-      await env.BUCKET.delete('personaje/abierta');
+      await archivos(env).put('personaje/cerrada', img, {httpMetadata: {contentType: 'image/jpeg'}});
+      await archivos(env).delete('personaje/abierta');
       return json({ok: true});
     } catch (e) {
       return json({error: 'No se pudo dibujar: ' + e.message}, 502);
@@ -451,15 +474,15 @@ async function api(req, env, path, origin) {
       if (!m) return json({error: 'Imagen inválida'}, 400);
       const bytes = Uint8Array.from(atob(m[3]), (c) => c.charCodeAt(0));
       if (bytes.length > 6e6) return json({error: 'La imagen pesa más de 6 MB'}, 400);
-      await env.BUCKET.put('personaje/' + k, bytes, {httpMetadata: {contentType: m[1]}});
+      await archivos(env).put('personaje/' + k, bytes, {httpMetadata: {contentType: m[1]}});
     }
-    if (!body.abierta) await env.BUCKET.delete('personaje/abierta');
+    if (!body.abierta) await archivos(env).delete('personaje/abierta');
     return json({ok: true});
   }
   if (path === 'video-borrar') {
     const v = await loadVideo(env, body.id);
     if (!v) return json({error: 'No existe'}, 404);
-    await env.BUCKET.delete('videos/' + v.id + '.mp4');
+    await archivos(env).delete('videos/' + v.id + '.mp4');
     v.estado = 'borrado';
     await saveVideo(env, v);
     return json({ok: true});
@@ -485,7 +508,7 @@ export default {
         if (!(await loggedIn(req, env))) return new Response('Inicia sesión', {status: 401});
         const [kind, id] = url.pathname.slice(9).split('/');
         const key = kind === 'personaje' ? 'personaje/cerrada' : kind === 'video' ? 'videos/' + String(id || '').replace(/[^a-f0-9-]/g, '') + '.mp4' : '';
-        const o = key && (await env.BUCKET.get(key));
+        const o = key && (await archivos(env).get(key));
         if (!o) return new Response('No existe', {status: 404});
         const h = {'Content-Type': o.httpMetadata?.contentType || 'application/octet-stream', 'Cache-Control': 'private, max-age=300'};
         if (kind === 'video' && url.searchParams.has('descargar')) h['Content-Disposition'] = `attachment; filename="video-${String(id).slice(0, 8)}.mp4"`;
