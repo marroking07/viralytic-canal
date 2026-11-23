@@ -1,0 +1,11 @@
+{
+  // Viralytic AI · edición Canal
+  "name": "mi-canal-viralytic",
+  "main": "src/index.js",
+  "compatibility_date": "2025-09-01",
+  "workers_dev": true,
+  "ai": {"binding": "AI"},
+  "d1_databases": [{"binding": "DB", "database_name": "mi-canal-viralytic"}],
+  "r2_buckets": [{"binding": "BUCKET", "bucket_name": "mi-canal-viralytic"}],
+  "observability": {"enabled": true}
+}
