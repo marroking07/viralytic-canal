@@ -270,12 +270,14 @@ async function nuevoVideo(env, origin) {
   const user = [`Escribe un guion nuevo.`, prev.length ? `NO repitas estos títulos ni sus ideas: ${prev.join(' | ')}` : ''].filter(Boolean).join('\n');
   let g = await aiJSON(env, cer.system, user);
   const words = (x) => (Array.isArray(x?.scenes) ? x.scenes : []).reduce((n, s) => n + String(s?.text || '').split(/\s+/).filter(Boolean).length, 0);
-  if (words(g) < 120 && Array.isArray(g.scenes) && g.scenes.length) {
+  // La IA gratis suele quedarse corta: se le pide alargar cada escena (hasta 2 veces) y se toma lo que sí mejoró.
+  const wc = (t) => String(t || '').split(/\s+/).filter(Boolean).length;
+  for (let k = 0; k < 2 && words(g) < 120 && Array.isArray(g.scenes) && g.scenes.length; k++) {
     try {
-      const ex = await aiJSON(env, cer.expand, `Título: ${clip(g.title, 90)}\nEscenas (${g.scenes.length}):\n` + g.scenes.map((s, i) => `${i + 1}. ${clip(s?.text, 300)}`).join('\n'));
-      if (Array.isArray(ex?.scenes) && ex.scenes.length === g.scenes.length && words(ex) > words(g)) {
-        g.scenes = g.scenes.map((s, i) => ({...s, text: ex.scenes[i]?.text || s.text}));
-        if (ex.title && String(ex.title).length > 15) g.title = ex.title;
+      const ex = await aiJSON(env, cer.expand, `Título: ${clip(g.title, 90)}\nCada escena DEBE quedar de 25 a 35 palabras. Escenas (${g.scenes.length}):\n` + g.scenes.map((s, i) => `${i + 1}. ${clip(s?.text, 400)}`).join('\n'));
+      if (Array.isArray(ex?.scenes)) {
+        g.scenes = g.scenes.map((s, i) => (wc(ex.scenes[i]?.text) > wc(s.text) ? {...s, text: ex.scenes[i].text} : s));
+        if (ex.title && String(ex.title).length > 15 && k === 0) g.title = ex.title;
       }
     } catch {}
   }
