@@ -512,11 +512,21 @@ export default {
         if (!(await loggedIn(req, env))) return new Response('Inicia sesión', {status: 401});
         const [kind, id] = url.pathname.slice(9).split('/');
         const key = kind === 'personaje' ? 'personaje/cerrada' : kind === 'video' ? 'videos/' + String(id || '').replace(/[^a-f0-9-]/g, '') + '.mp4' : '';
-        const o = key && (await archivos(env).get(key));
-        if (!o) return new Response('No existe', {status: 404});
-        const h = {'Content-Type': o.httpMetadata?.contentType || 'application/octet-stream', 'Cache-Control': 'private, max-age=300'};
+        if (!key) return new Response('No existe', {status: 404});
+        const r = await env.ARCHIVOS.getWithMetadata(key, {type: 'arrayBuffer'});
+        if (!r || !r.value) return new Response('No existe', {status: 404});
+        const buf = r.value, size = buf.byteLength;
+        const h = {'Content-Type': r.metadata?.type || 'application/octet-stream', 'Cache-Control': 'private, max-age=300', 'Accept-Ranges': 'bytes'};
         if (kind === 'video' && url.searchParams.has('descargar')) h['Content-Disposition'] = `attachment; filename="video-${String(id).slice(0, 8)}.mp4"`;
-        return new Response(o.body, {headers: h});
+        // Rangos: el iPhone los exige para reproducir video y permiten adelantar/regresar.
+        const m = /^bytes=(\d*)-(\d*)$/.exec(req.headers.get('Range') || '');
+        if (m && (m[1] || m[2])) {
+          let a = m[1] ? Number(m[1]) : Math.max(0, size - Number(m[2]));
+          let b = m[1] && m[2] ? Math.min(Number(m[2]), size - 1) : size - 1;
+          if (a >= size || a > b) return new Response(null, {status: 416, headers: {...h, 'Content-Range': `bytes */${size}`}});
+          return new Response(buf.slice(a, b + 1), {status: 206, headers: {...h, 'Content-Range': `bytes ${a}-${b}/${size}`, 'Content-Length': String(b - a + 1)}});
+        }
+        return new Response(buf, {headers: {...h, 'Content-Length': String(size)}});
       }
       return new Response(PAGE, {headers: {'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store', 'X-Frame-Options': 'DENY'}});
     } catch (e) {
