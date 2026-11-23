@@ -22,8 +22,10 @@ function archivos(env) {
       return r && r.value ? {body: r.value, httpMetadata: {contentType: r.metadata?.type}} : null;
     },
     async head(k) {
-      const r = await kv.list({prefix: k, limit: 1});
-      return r.keys.some((x) => x.name === k) ? {} : null;
+      const r = await kv.getWithMetadata(k, {type: 'stream'});
+      if (!r || !r.value) return null;
+      await r.value.cancel().catch(() => {});
+      return {};
     },
     async delete(k) {
       await kv.delete(k);
