@@ -1,0 +1,6 @@
+{
+  "name": "mi-canal-viralytic",
+  "private": true,
+  "scripts": {"deploy": "wrangler deploy"},
+  "devDependencies": {"wrangler": "^4.0.0"}
+}
